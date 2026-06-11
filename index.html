@@ -1,0 +1,602 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>建物間距離 測定試作</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root{
+    --bg:#0b1020;
+    --panel:rgba(12,18,34,.86);
+    --line:rgba(255,255,255,.16);
+    --text:#f7f7fb;
+    --muted:#b9c2d8;
+    --accent:#4da3ff;
+    --danger:#ff6b6b;
+    --ok:#4cd964;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;
+    background:var(--bg);
+    color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+    overscroll-behavior:none;
+  }
+  .app{
+    min-height:100dvh;
+    display:flex;
+    flex-direction:column;
+  }
+  .cameraWrap{
+    position:relative;
+    height:58dvh;
+    min-height:360px;
+    background:#000;
+    overflow:hidden;
+    touch-action:none;
+  }
+  video{
+    position:absolute;
+    left:50%;
+    top:50%;
+    width:100%;
+    height:100%;
+    object-fit:cover;
+    transform:translate(-50%,-50%) scale(var(--zoom,1));
+    transform-origin:center center;
+  }
+  .cross{
+    position:absolute;
+    inset:0;
+    pointer-events:none;
+  }
+  .cross:before,.cross:after{
+    content:"";
+    position:absolute;
+    background:rgba(255,255,255,.75);
+    box-shadow:0 0 8px rgba(0,0,0,.8);
+  }
+  .cross:before{width:1px;height:100%;left:50%;top:0}
+  .cross:after{height:1px;width:100%;left:0;top:50%}
+  .dot{
+    position:absolute;
+    left:50%;
+    top:50%;
+    width:18px;
+    height:18px;
+    margin-left:-9px;
+    margin-top:-9px;
+    border:2px solid #fff;
+    border-radius:50%;
+    box-shadow:0 0 10px #000;
+  }
+  .hud{
+    position:absolute;
+    left:10px;
+    right:10px;
+    top:10px;
+    display:flex;
+    gap:8px;
+    flex-wrap:wrap;
+    align-items:center;
+    pointer-events:none;
+  }
+  .chip{
+    background:rgba(0,0,0,.55);
+    border:1px solid rgba(255,255,255,.18);
+    border-radius:999px;
+    padding:6px 10px;
+    font-size:12px;
+    backdrop-filter:blur(8px);
+  }
+  .zoomLabel{
+    position:absolute;
+    right:12px;
+    bottom:12px;
+    background:rgba(0,0,0,.55);
+    border:1px solid rgba(255,255,255,.18);
+    border-radius:12px;
+    padding:6px 10px;
+    font-size:13px;
+  }
+  .panel{
+    background:var(--panel);
+    border-top:1px solid var(--line);
+    padding:12px;
+  }
+  .buttons{
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:8px;
+  }
+  button{
+    appearance:none;
+    border:0;
+    border-radius:14px;
+    padding:13px 10px;
+    font-size:15px;
+    font-weight:700;
+    color:#fff;
+    background:#263149;
+  }
+  button.primary{background:var(--accent)}
+  button.ok{background:#198f45}
+  button.danger{background:#b73535}
+  button:disabled{opacity:.45}
+  .smallBtns{
+    display:grid;
+    grid-template-columns:1fr 1fr 1fr;
+    gap:8px;
+    margin-top:8px;
+  }
+  .status{
+    margin-top:10px;
+    padding:10px;
+    border:1px solid var(--line);
+    border-radius:14px;
+    background:rgba(255,255,255,.05);
+    font-size:13px;
+    line-height:1.5;
+  }
+  .result{
+    margin-top:10px;
+    padding:12px;
+    border-radius:16px;
+    background:rgba(77,163,255,.12);
+    border:1px solid rgba(77,163,255,.35);
+  }
+  .result .big{
+    font-size:28px;
+    font-weight:900;
+    letter-spacing:.02em;
+  }
+  .mapArea{
+    height:42dvh;
+    min-height:330px;
+    border-top:1px solid var(--line);
+    display:none;
+    position:relative;
+  }
+  #map{height:100%;width:100%}
+  .mapHelp{
+    position:absolute;
+    left:8px;
+    right:8px;
+    top:8px;
+    z-index:500;
+    background:rgba(0,0,0,.64);
+    color:white;
+    border-radius:12px;
+    padding:8px 10px;
+    font-size:12px;
+    line-height:1.45;
+    pointer-events:none;
+  }
+  .records{
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:8px;
+    margin-top:8px;
+  }
+  .card{
+    border:1px solid var(--line);
+    background:rgba(255,255,255,.05);
+    border-radius:14px;
+    padding:9px;
+    font-size:12px;
+    line-height:1.45;
+    min-height:74px;
+  }
+  .card b{font-size:14px}
+  .warn{color:#ffd166}
+  .muted{color:var(--muted)}
+  a{color:#9dccff}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="cameraWrap" id="cameraWrap">
+    <video id="video" autoplay playsinline muted></video>
+    <div class="cross"><div class="dot"></div></div>
+    <div class="hud">
+      <div class="chip" id="gpsChip">GPS: 未取得</div>
+      <div class="chip" id="compassChip">方角: 未取得</div>
+      <div class="chip" id="accuracyChip">精度: -</div>
+    </div>
+    <div class="zoomLabel" id="zoomLabel">拡大 1.0x</div>
+  </div>
+
+  <div class="panel">
+    <div class="buttons">
+      <button class="primary" id="startBtn">カメラ・GPS開始</button>
+      <button id="sensorBtn">方角センサー許可</button>
+      <button class="ok" id="recordA">建物Aを記録</button>
+      <button class="ok" id="recordB">建物Bを記録</button>
+    </div>
+
+    <div class="smallBtns">
+      <button id="showMapBtn">補正地図</button>
+      <button id="clearBtn">リセット</button>
+      <button id="helpBtn">使い方</button>
+    </div>
+
+    <div class="records">
+      <div class="card" id="cardA"><b>建物A</b><br><span class="muted">未記録</span></div>
+      <div class="card" id="cardB"><b>建物B</b><br><span class="muted">未記録</span></div>
+    </div>
+
+    <div class="result" id="resultBox">
+      <div>建物A-B 距離</div>
+      <div class="big" id="distanceText">未測定</div>
+      <div class="muted" id="resultNote">A/Bを記録後、補正地図で位置をタップしてください。</div>
+    </div>
+
+    <div class="status" id="status">
+      画面中央の十字に建物を合わせて「建物Aを記録」「建物Bを記録」を押します。ピンチで拡大できます。
+    </div>
+  </div>
+
+  <div class="mapArea" id="mapArea">
+    <div id="map"></div>
+    <div class="mapHelp" id="mapHelp">
+      補正：AまたはBの方角線付近をタップすると位置を決めます。最初のタップ=A、次=B。もう一度押すと上書きできます。
+    </div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const video = document.getElementById("video");
+const startBtn = document.getElementById("startBtn");
+const sensorBtn = document.getElementById("sensorBtn");
+const recordA = document.getElementById("recordA");
+const recordB = document.getElementById("recordB");
+const showMapBtn = document.getElementById("showMapBtn");
+const clearBtn = document.getElementById("clearBtn");
+const helpBtn = document.getElementById("helpBtn");
+const gpsChip = document.getElementById("gpsChip");
+const compassChip = document.getElementById("compassChip");
+const accuracyChip = document.getElementById("accuracyChip");
+const statusEl = document.getElementById("status");
+const cardA = document.getElementById("cardA");
+const cardB = document.getElementById("cardB");
+const distanceText = document.getElementById("distanceText");
+const resultNote = document.getElementById("resultNote");
+const mapArea = document.getElementById("mapArea");
+const cameraWrap = document.getElementById("cameraWrap");
+const zoomLabel = document.getElementById("zoomLabel");
+
+let currentPos = null;
+let heading = null;
+let headingAccuracyNote = "";
+let watchId = null;
+let map = null;
+let markers = {};
+let rays = {};
+let lineAB = null;
+let nextTap = "A";
+
+let rec = {
+  A:null,
+  B:null
+};
+let points = {
+  A:null,
+  B:null
+};
+
+let zoom = 1;
+let pinchStartDist = null;
+let pinchStartZoom = 1;
+
+function setStatus(msg){ statusEl.innerHTML = msg; }
+
+function fmt(n, digits=6){
+  if(n === null || n === undefined || Number.isNaN(n)) return "-";
+  return Number(n).toFixed(digits);
+}
+function fmtDist(m){
+  if(!Number.isFinite(m)) return "未測定";
+  if(m >= 1000) return (m/1000).toFixed(3) + " km";
+  if(m >= 100) return Math.round(m) + " m";
+  return m.toFixed(1) + " m";
+}
+function toRad(d){ return d*Math.PI/180; }
+function toDeg(r){ return r*180/Math.PI; }
+
+function haversine(a,b){
+  const R=6371008.8;
+  const p1=toRad(a.lat), p2=toRad(b.lat);
+  const dp=toRad(b.lat-a.lat), dl=toRad(b.lng-a.lng);
+  const x=Math.sin(dp/2)**2 + Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2;
+  return 2*R*Math.atan2(Math.sqrt(x),Math.sqrt(1-x));
+}
+function destination(lat,lng,bearing,meters){
+  const R=6371008.8;
+  const br=toRad(bearing);
+  const p1=toRad(lat);
+  const l1=toRad(lng);
+  const d=meters/R;
+  const p2=Math.asin(Math.sin(p1)*Math.cos(d)+Math.cos(p1)*Math.sin(d)*Math.cos(br));
+  const l2=l1+Math.atan2(Math.sin(br)*Math.sin(d)*Math.cos(p1),Math.cos(d)-Math.sin(p1)*Math.sin(p2));
+  return {lat:toDeg(p2), lng:((toDeg(l2)+540)%360)-180};
+}
+function bearingLine(record, dist=3000){
+  if(!record) return null;
+  return [record.pos, destination(record.pos.lat, record.pos.lng, record.heading, dist)];
+}
+function escapeHTML(s){
+  return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));
+}
+
+async function startAll(){
+  try{
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video:{ facingMode:{ideal:"environment"} },
+      audio:false
+    });
+    video.srcObject = stream;
+    setStatus("カメラを開始しました。次にGPSと方角を確認してください。");
+  }catch(e){
+    setStatus("<span class='warn'>カメラを開始できません。</span><br>iPhoneではHTTPS、またはGitHub Pages上で開く必要があります。<br>" + escapeHTML(e.message));
+  }
+
+  if("geolocation" in navigator){
+    watchId = navigator.geolocation.watchPosition(pos=>{
+      currentPos = {
+        lat: pos.coords.latitude,
+        lng: pos.coords.longitude,
+        acc: pos.coords.accuracy
+      };
+      gpsChip.textContent = "GPS: OK";
+      accuracyChip.textContent = "精度: ±" + Math.round(pos.coords.accuracy) + "m";
+      if(map && !map._movedOnce){
+        map.setView([currentPos.lat,currentPos.lng], 18);
+        map._movedOnce = true;
+      }
+    }, err=>{
+      gpsChip.textContent = "GPS: エラー";
+      setStatus("<span class='warn'>GPSを取得できません。</span><br>" + escapeHTML(err.message));
+    }, {
+      enableHighAccuracy:true,
+      maximumAge:1000,
+      timeout:15000
+    });
+  }else{
+    setStatus("このブラウザではGPSが使えません。");
+  }
+}
+
+async function requestOrientation(){
+  try{
+    if(typeof DeviceOrientationEvent !== "undefined" &&
+       typeof DeviceOrientationEvent.requestPermission === "function"){
+      const res = await DeviceOrientationEvent.requestPermission();
+      if(res !== "granted"){
+        setStatus("方角センサーが許可されませんでした。");
+        return;
+      }
+    }
+    window.addEventListener("deviceorientation", onOrientation, true);
+    window.addEventListener("deviceorientationabsolute", onOrientation, true);
+    setStatus("方角センサーを開始しました。建物を十字に合わせて記録してください。");
+  }catch(e){
+    setStatus("<span class='warn'>方角センサーを開始できません。</span><br>" + escapeHTML(e.message));
+  }
+}
+
+function onOrientation(e){
+  let h = null;
+
+  // iOS Safari: webkitCompassHeading がある場合が多い
+  if(typeof e.webkitCompassHeading === "number"){
+    h = e.webkitCompassHeading;
+    headingAccuracyNote = typeof e.webkitCompassAccuracy === "number"
+      ? " / ±" + Math.round(e.webkitCompassAccuracy) + "°"
+      : "";
+  } else if(e.absolute && typeof e.alpha === "number"){
+    h = 360 - e.alpha;
+    headingAccuracyNote = "";
+  } else if(typeof e.alpha === "number"){
+    h = 360 - e.alpha;
+    headingAccuracyNote = " / 相対";
+  }
+
+  if(h !== null){
+    heading = (h + 360) % 360;
+    compassChip.textContent = "方角: " + Math.round(heading) + "°" + headingAccuracyNote;
+  }
+}
+
+function recordTarget(name){
+  if(!currentPos){
+    setStatus("先にGPSを取得してください。屋外で少し待つと安定します。");
+    return;
+  }
+  if(heading === null){
+    setStatus("先に「方角センサー許可」を押してください。");
+    return;
+  }
+  rec[name] = {
+    pos:{lat:currentPos.lat,lng:currentPos.lng},
+    heading:heading,
+    gpsAcc:currentPos.acc,
+    time:new Date()
+  };
+  updateCards();
+  drawMapThings();
+  setStatus(`建物${name}を記録しました。方角 ${Math.round(heading)}°。次は${name==="A"?"B":"補正地図"}へ進んでください。`);
+}
+
+function updateCards(){
+  for(const name of ["A","B"]){
+    const el = name==="A" ? cardA : cardB;
+    const r = rec[name];
+    const p = points[name];
+    let html = `<b>建物${name}</b><br>`;
+    if(!r){
+      html += `<span class="muted">未記録</span>`;
+    }else{
+      html += `方角: ${Math.round(r.heading)}°<br>GPS: ±${Math.round(r.gpsAcc)}m<br>`;
+      html += p ? `<span style="color:#7ee787">補正位置: 済</span>` : `<span class="muted">補正位置: 未</span>`;
+    }
+    el.innerHTML = html;
+  }
+  updateDistance();
+}
+
+function updateDistance(){
+  if(points.A && points.B){
+    const d = haversine(points.A, points.B);
+    distanceText.textContent = fmtDist(d);
+    resultNote.textContent = "補正地図で指定したA-B間の水平距離です。";
+  }else{
+    distanceText.textContent = "未測定";
+    resultNote.textContent = "A/Bを記録後、補正地図で位置をタップしてください。";
+  }
+}
+
+function initMap(){
+  if(map) return;
+  map = L.map("map");
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+    attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(map);
+  if(currentPos) map.setView([currentPos.lat,currentPos.lng], 18);
+  else map.setView([35.681236,139.767125], 16);
+
+  map.on("click", e=>{
+    const name = nextTap;
+    points[name] = {lat:e.latlng.lat,lng:e.latlng.lng};
+    nextTap = name === "A" ? "B" : "A";
+    drawMapThings();
+    updateCards();
+    setStatus(`地図上で建物${name}の位置を補正しました。次のタップは建物${nextTap}です。`);
+  });
+}
+
+function drawMapThings(){
+  if(!map) return;
+
+  for(const k of Object.keys(markers)){ map.removeLayer(markers[k]); }
+  for(const k of Object.keys(rays)){ map.removeLayer(rays[k]); }
+  markers = {};
+  rays = {};
+  if(lineAB){ map.removeLayer(lineAB); lineAB=null; }
+
+  if(currentPos){
+    markers.me = L.circleMarker([currentPos.lat,currentPos.lng], {
+      radius:7, color:"#222", fillColor:"#4da3ff", fillOpacity:1, weight:2
+    }).addTo(map).bindPopup("現在地");
+  }
+
+  for(const name of ["A","B"]){
+    const r = rec[name];
+    if(r){
+      markers["obs"+name] = L.circleMarker([r.pos.lat,r.pos.lng], {
+        radius:5, color:"#fff", fillColor:name==="A"?"#ffb703":"#2ec4b6", fillOpacity:1, weight:2
+      }).addTo(map).bindPopup(`建物${name}を記録した位置`);
+
+      const line = bearingLine(r, 5000);
+      if(line){
+        rays[name] = L.polyline([[line[0].lat,line[0].lng],[line[1].lat,line[1].lng]], {
+          color:name==="A"?"#ffb703":"#2ec4b6",
+          weight:3,
+          opacity:.9,
+          dashArray:"8,8"
+        }).addTo(map).bindPopup(`建物${name}の方角線`);
+      }
+    }
+
+    const p = points[name];
+    if(p){
+      markers[name] = L.marker([p.lat,p.lng], {
+        title:`建物${name}`
+      }).addTo(map).bindPopup(`建物${name}`);
+    }
+  }
+
+  if(points.A && points.B){
+    lineAB = L.polyline([[points.A.lat,points.A.lng],[points.B.lat,points.B.lng]], {
+      color:"#ff4d6d",
+      weight:4
+    }).addTo(map);
+  }
+}
+
+function showMap(){
+  mapArea.style.display = mapArea.style.display === "none" || !mapArea.style.display ? "block" : "none";
+  if(mapArea.style.display === "block"){
+    initMap();
+    setTimeout(()=>map.invalidateSize(), 100);
+    drawMapThings();
+    if(currentPos) map.setView([currentPos.lat,currentPos.lng], 18);
+  }
+}
+
+function clearAll(){
+  rec = {A:null,B:null};
+  points = {A:null,B:null};
+  nextTap = "A";
+  updateCards();
+  drawMapThings();
+  setStatus("リセットしました。");
+}
+
+function help(){
+  alert(
+`使い方
+
+1. カメラ・GPS開始
+2. 方角センサー許可
+3. 画面中央の十字に建物Aを合わせて記録
+4. 建物Bも同じように記録
+5. 補正地図を開く
+6. 方角線付近で建物A、建物Bの位置をタップ
+7. A-Bの距離が表示されます
+
+注意：
+カメラだけでは奥行きが分からないため、最後に地図上で少し補正します。
+遠くの建物ほど、方角センサーの数度の誤差で位置が大きくずれます。`
+  );
+}
+
+function touchDistance(touches){
+  const dx=touches[0].clientX-touches[1].clientX;
+  const dy=touches[0].clientY-touches[1].clientY;
+  return Math.hypot(dx,dy);
+}
+cameraWrap.addEventListener("touchstart", e=>{
+  if(e.touches.length===2){
+    pinchStartDist = touchDistance(e.touches);
+    pinchStartZoom = zoom;
+  }
+}, {passive:false});
+cameraWrap.addEventListener("touchmove", e=>{
+  if(e.touches.length===2 && pinchStartDist){
+    e.preventDefault();
+    const d = touchDistance(e.touches);
+    zoom = Math.min(8, Math.max(1, pinchStartZoom * d / pinchStartDist));
+    document.documentElement.style.setProperty("--zoom", zoom.toFixed(3));
+    zoomLabel.textContent = "拡大 " + zoom.toFixed(1) + "x";
+  }
+}, {passive:false});
+cameraWrap.addEventListener("touchend", ()=>{
+  pinchStartDist = null;
+}, {passive:false});
+
+startBtn.addEventListener("click", startAll);
+sensorBtn.addEventListener("click", requestOrientation);
+recordA.addEventListener("click", ()=>recordTarget("A"));
+recordB.addEventListener("click", ()=>recordTarget("B"));
+showMapBtn.addEventListener("click", showMap);
+clearBtn.addEventListener("click", clearAll);
+helpBtn.addEventListener("click", help);
+
+updateCards();
+</script>
+</body>
+</html>
